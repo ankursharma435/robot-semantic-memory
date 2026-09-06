@@ -44,6 +44,7 @@ from memory_store import MemoryStore, TIER_DIMS
 from gate import decide, Decision, TIER_CONFIDENCE_THRESHOLDS, threshold_summary
 from metrics import MetricsLogger
 from frame_source import FrameSource, add_source_args
+from hud import HUD
 import nvidia_nim
 import riva_voice
 
@@ -55,7 +56,8 @@ def frame_to_jpeg_bytes(frame) -> bytes:
     return buf.tobytes()
 
 
-def run_query(query_text: str, frame, pos, store: MemoryStore, metrics: MetricsLogger):
+def run_query(query_text: str, frame, pos, store: MemoryStore, metrics: MetricsLogger,
+               hud: HUD | None = None):
     """Shared path for both typed and spoken queries."""
     # Time the encode and the search SEPARATELY. On CPU the text encode is
     # ~99.9% of the cheap path, and reporting only the total made the gate
@@ -74,6 +76,8 @@ def run_query(query_text: str, frame, pos, store: MemoryStore, metrics: MetricsL
     cheap_latency_ms = encode_ms + search_ms
 
     print(f"  query encoded in {encode_ms:.1f}ms, memory searched in {search_ms:.3f}ms")
+    per_tier_scores = {t: (m[0][0] if m else 0.0)
+                       for t, m in store.query_all_tiers(q_vec, top_k=1).items()}
 
     if best_entry is None:
         print("  no memories stored yet.")
@@ -82,9 +86,8 @@ def run_query(query_text: str, frame, pos, store: MemoryStore, metrics: MetricsL
                               encode_ms=encode_ms, search_ms=search_ms)
         return
 
-    results = store.query_all_tiers(q_vec, top_k=1)
     print("  per-tier top-1: " + "  ".join(
-        f"{t}({TIER_DIMS[t]}d)={m[0][0]:.3f}" for t, m in results.items() if m))
+        f"{t}({TIER_DIMS[t]}d)={v:.3f}" for t, v in per_tier_scores.items()))
 
     print(f"  best match: tier={best_tier} label='{best_entry.label}' "
           f"pos=({best_entry.x:.1f},{best_entry.y:.1f}) similarity={best_score:.3f}")
@@ -93,10 +96,15 @@ def run_query(query_text: str, frame, pos, store: MemoryStore, metrics: MetricsL
     result = decide(best_score, requires_manipulation=requires_manip, tier=best_tier)
     print(f"  GATE DECISION: {result.decision.value.upper()} — {result.reason}")
 
+    if hud:
+        hud.set_result(per_tier_scores, best_tier, result.decision.value, result.reason,
+                        best_entry.label, (best_entry.x, best_entry.y),
+                        encode_ms, search_ms)
+
     if result.decision == Decision.CHEAP:
         response = f"Found it. Navigate to ({best_entry.x:.1f}, {best_entry.y:.1f})."
         print(f"  -> cheap path: {response}")
-        speak_safe(response)
+        speak_safe(response, hud)
         metrics.log_decision(query_text, best_tier, best_score, "cheap", cheap_latency_ms,
                               encode_ms=encode_ms, search_ms=search_ms)
     else:
@@ -106,9 +114,11 @@ def run_query(query_text: str, frame, pos, store: MemoryStore, metrics: MetricsL
             response_text, escalate_ms = nvidia_nim.call_vlm_escalation(
                 frame_bytes, nvidia_nim.robot_perception_prompt(query_text))
             print(f"  VLM responded in {escalate_ms:.1f}ms: {response_text}")
+            if hud:
+                hud.set_vlm(escalate_ms, response_text.strip())
             print(f"  RATIO: escalation took {escalate_ms / cheap_latency_ms:.1f}x the "
                   f"whole cheap path, {escalate_ms / search_ms:,.0f}x the memory lookup")
-            speak_safe(response_text[:200])
+            speak_safe(response_text[:200], hud)
             metrics.log_decision(query_text, best_tier, best_score, "escalate",
                                   cheap_latency_ms, escalate_latency_ms=escalate_ms,
                                   encode_ms=encode_ms, search_ms=search_ms)
@@ -116,15 +126,17 @@ def run_query(query_text: str, frame, pos, store: MemoryStore, metrics: MetricsL
             print(f"  VLM call failed: {e}")
 
 
-def speak_safe(text: str):
+def speak_safe(text: str, hud=None):
     """Wraps Riva TTS so a network hiccup never crashes the live demo."""
     try:
         riva_voice.speak(text)
+        if hud:
+            hud.light("Riva TTS")
     except Exception as e:
         print(f"  (TTS skipped — {e})")
 
 
-def run_nvclip_comparison(frame, metrics: MetricsLogger):
+def run_nvclip_comparison(frame, metrics: MetricsLogger, hud=None):
     """The 'c' beat: same frame through the local truncatable encoder and
     through NVIDIA's fixed-width hosted embedder, side by side.
 
@@ -182,6 +194,7 @@ def main():
 
     store = MemoryStore(short_ttl_seconds=30.0)
     metrics = MetricsLogger()
+    hud = HUD(TIER_DIMS)
     pos = [0.0, 0.0]
     step = 0.5
     frame_count = 0
@@ -198,10 +211,8 @@ def main():
         latest_frame = frame
         frame_count += 1
 
-        cv2.putText(frame, f"pos=({pos[0]:.1f},{pos[1]:.1f})  "
-                            f"short={len(store._entries['short'])}  medium={len(store._entries['medium'])}",
-                    (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
-        cv2.imshow("robot-semantic-memory — NVIDIA-integrated demo", frame)
+        hud.set_memory(store.stats())
+        cv2.imshow("robot-semantic-memory — NVIDIA-integrated demo", hud.compose(frame))
 
         if frame_count % SHORT_TERM_EVERY_N_FRAMES == 0:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -230,18 +241,26 @@ def main():
         elif key == ord(' '):
             query_text = input("Query (e.g. 'where is the red mug'): ").strip()
             if query_text:
-                run_query(query_text, frame, pos, store, metrics)
+                hud.begin_query(query_text)
+                cv2.imshow("robot-semantic-memory — NVIDIA-integrated demo",
+                           hud.compose(frame))
+                cv2.waitKey(1)
+                run_query(query_text, frame, pos, store, metrics, hud)
         elif key == ord('v'):
             try:
                 clip = riva_voice.record_clip(4.0)
                 query_text, asr_ms = riva_voice.transcribe(clip)
                 print(f"  heard (in {asr_ms:.1f}ms): '{query_text}'")
                 if query_text:
-                    run_query(query_text, frame, pos, store, metrics)
+                    hud.begin_query(query_text, spoken=True)
+                    cv2.imshow("robot-semantic-memory — NVIDIA-integrated demo",
+                               hud.compose(frame))
+                    cv2.waitKey(1)
+                    run_query(query_text, frame, pos, store, metrics, hud)
             except Exception as e:
                 print(f"  voice query failed: {e}")
         elif key == ord('c'):
-            run_nvclip_comparison(frame, metrics)
+            run_nvclip_comparison(frame, metrics, hud)
         elif key == ord('p'):
             metrics.print_report(
                 tier_counts=store.stats(),
