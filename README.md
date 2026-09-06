@@ -1,13 +1,138 @@
-# robot-semantic-memory — starter scaffold
+# robot-semantic-memory
 
-A minimal, runnable version of the concept from the deck: a small
-Matryoshka (MRL) multimodal encoder feeding a tiered vector memory, with
-a gate that decides when a decision is cheap enough to act on memory
-alone, versus when it should escalate to a (for now, stubbed) VLA.
+**A cheap, truncatable visual memory that knows when a robot does *not* need
+to wake an expensive model.**
 
-This is deliberately hardware-agnostic. It runs on your laptop with a
-webcam today, and ports to the Jetson + chassis later with the changes
-listed at the bottom — the encoder/memory/gate logic doesn't change.
+A small Matryoshka-trained (MRL) multimodal encoder feeds a tiered vector
+memory. A gate decides, per query, whether stored memory can answer — or
+whether the question needs a vision-language model. Most of the time it
+can't need one, because most of what a robot sees, it has already seen.
+
+Runs today on a laptop with no NVIDIA GPU, against NVIDIA-hosted NIM
+microservices. The encoder/memory/gate logic is hardware-agnostic and ports
+to a Jetson unchanged.
+
+---
+
+## The problem
+
+A robot that runs a vision-language model on every frame pays for a large
+forward pass to answer questions it has already answered. That's slow, it's
+power-hungry on a battery, and it occupies the one accelerator the robot has.
+
+The interesting question isn't how to make the big model faster. It's how to
+avoid calling it.
+
+## The idea
+
+**Matryoshka Representation Learning** trains an encoder so that *any prefix*
+of its output vector is itself a valid embedding. One forward pass produces
+1024 dimensions; the first 64, 256 or 768 of them each still mean something
+on their own.
+
+That turns one encode into three memory tiers with different costs:
+
+| Tier | Dims | Bytes/entry | Role |
+|---|---|---|---|
+| short | 64 | 256 | "what did I just see" — always-on, decays after 30 s |
+| medium | 256 | 1024 | "what have I learned" — labelled, consolidated |
+| long | 768 | 3072 | "what do I know well" — durable |
+
+A fixed-width baseline (NVIDIA's `llama-nemotron-embed-vl-1b-v2`, 2048 dims)
+has no cheaper option: every memory costs 8192 bytes whether you need the
+precision or not.
+
+> **An important caveat, stated up front:** truncation does **not** make the
+> encoder cheaper. The backbone runs once regardless of how many dimensions
+> you keep. What truncation buys is cheaper *storage* and cheaper
+> *comparison*. See `src/encoder.py`.
+
+```mermaid
+flowchart LR
+    CAM[camera frame] --> ENC[MRL encoder<br/>jina-clip-v2 · 1024d]
+    Q[text or spoken query] --> ENC
+    ENC --> T[truncate + renormalize]
+    T --> S[short 64d]
+    T --> M[medium 256d]
+    T --> L[long 768d]
+    S & M & L --> BM[best_match<br/>tier priority]
+    BM --> G{gate}
+    G -->|CHEAP<br/>~0.16 ms| ACT[act on stored coordinates]
+    G -->|ESCALATE<br/>~2.6 s| VLM[NVIDIA NIM VLM<br/>→ on-device VLA later]
+```
+
+The gate escalates on three conditions: the best match is below that tier's
+novelty threshold (never seen this), below its confidence threshold (weak
+match), or the task needs manipulation (memory knows *where*, not *how*).
+
+### The non-obvious part
+
+Cosine scores from different truncation widths **are not comparable**.
+Truncating an MRL embedding *systematically raises* similarity — the dropped
+dimensions are the discriminative ones. Measured, same image/text pair:
+
+```
+long (768d) = 0.354    medium (256d) = 0.386    short (64d) = 0.435
+```
+
+So a narrow tier looks *more confident* while being *less able to tell things
+apart*. Picking the highest score across tiers — the obvious implementation —
+always returns the 64-dim tier, which is stored unlabelled and has the worst
+Recall@1. That was a real bug here; it made every query report `label=None`
+and broke novelty detection entirely.
+
+The fix is `MemoryStore.best_match()`: walk tiers in priority order, each with
+its own threshold. It's regression-tested in
+`tests/test_core.py::TestBestMatchRegression`, including a test asserting that
+the *old* behaviour would still pick the short tier — so the fixture can't
+silently stop covering the bug.
+
+## Measured results
+
+Numbers from this machine (MacBook, CPU only). Reproduce with
+`python verify_offline.py --live` and `python evaluate_tiers.py <manifest> --calibrate`.
+
+| Result | Measured | What it means |
+|---|---|---|
+| Memory lookup | **0.16 ms** | vs ~2.6 s to escalate — **~16,000× cheaper** |
+| Storage | **16 KB vs 64 KB** | **4× less** than the 2048-dim fixed-width baseline |
+| Cross-modal retrieval | 4/4 (baseline), 3/4 (local) | text query → correct image, synthetic scenes |
+| Escalation on unseen objects | correct | novelty detection fires after the `best_match` fix |
+| Unit tests | 44 passing, <1 s | no model, network or camera needed |
+
+**The honest one:** on this hardware the cheap/expensive comparison
+**inverts**. The local text tower (561M params, CPU, ~0.5–1.8 s) is *slower*
+in wall-clock than a hosted 11B VLM answering from datacentre GPUs (~1.0 s).
+`metrics.py` prints a loud warning when that happens and puts the blended
+figure last, under a "do NOT lead with this" heading. The architectural
+claims — lookup cost and storage — hold on any hardware; wall-clock latency
+is the wrong axis until the encoder runs on a Jetson under TensorRT.
+
+## What this does *not* claim
+
+- **Not** that the cheap path is faster per call — measured false here.
+- **Not** that truncation saves encoder compute — it doesn't.
+- **Not** anything measured on a Jetson, under TensorRT, or on Isaac GR00T.
+  The hosted VLM is a *stand-in* for the escalation target, running on better
+  hardware than the local encoder.
+- **Not** a benchmark. Recall@1 comes from a small hand-photographed object
+  set; treat it as an illustration, not a published result.
+
+## NVIDIA technology used
+
+| Component | Role | Status |
+|---|---|---|
+| `llama-nemotron-embed-vl-1b-v2` (NIM) | fixed-width baseline embedder, 2048d | running |
+| `llama-3.2-11b-vision-instruct` (NIM) | escalation target, stands in for a VLA | running |
+| `parakeet-ctc-0.6b` (Riva ASR, gRPC) | spoken query → text | running |
+| `magpie-tts-multilingual` (Riva TTS, gRPC) | spoken answer | running |
+| Jetson Orin Nano Super | move encoder + memory on-device | next step |
+| TensorRT | collapse the encoder latency | next step |
+| Isaac GR00T N1 | replace the VLM stand-in with a real VLA | next step |
+
+The bottom three have **not** been run. The gate doesn't know what sits behind
+it, so swapping the escalation target is one function —
+`nvidia_nim.call_vlm_escalation()`.
 
 ## What's here
 
@@ -126,8 +251,8 @@ Click the video window so it has keyboard focus, then:
   1. get embedded into the same space as the images
   2. get compared against everything in memory
   3. produce a gate decision (CHEAP → prints the coordinates to navigate
-     to; ESCALATE → hits the VLA stub, which just prints what it would
-     have called)
+     to; ESCALATE → in demo_webcam.py hits a local stub; in demo_live.py
+     makes a real call to an NVIDIA-hosted VLM)
 
 Every ~10 frames also gets written into short-term memory automatically,
 so you can see that tier filling and then decaying (it prunes anything
@@ -154,19 +279,27 @@ older than 30 seconds).
    being better, and it's why the tiers get separate thresholds. See
    `MemoryStore.best_match()`.
 
-## What this scaffold intentionally does NOT do yet
+## Current limitations
 
-- **No real VLA call.** `gate.call_vla_stub()` just prints. Wiring in an
-  actual model (a served OpenVLA/π0 checkpoint, local or over the
-  network) is a separate, later step — get the memory/gate logic solid
-  first, since it's the cheap 90% of the system you'll be running
-  constantly.
+- **No real VLA.** `demo_live.py` makes a genuine network call to an
+  NVIDIA-hosted VLM, so the escalation path and its latency are real — but a
+  chat vision model is not an action model. It answers *what it sees*, not
+  *how to move*. Swapping in a real VLA (Isaac GR00T, OpenVLA, π0) is one
+  function: `nvidia_nim.call_vlm_escalation()`. `demo_webcam.py` keeps a
+  local stub so the offline fallback needs no keys.
 - **No real spatial metadata.** Position is a keyboard-controlled toy
   variable. On the robot this comes from wheel odometry (encoder ticks)
   or visual odometry, not from you pressing "w."
+- **Gate thresholds need calibrating per environment.** They print
+  `PROVISIONAL defaults (not calibrated)` at startup until you run
+  `evaluate_tiers.py --calibrate` against your own photographs. The shipped
+  values are corrected for dimensional bias but are not tuned to real data.
 - **No ANN index.** `memory_store.py` does a brute-force numpy scan.
   Fine up to low thousands of entries — swap in `hnswlib` or similar only
   if you actually outgrow that.
+- **Small evaluation set.** Recall@1 comes from a hand-photographed object
+  set of roughly a dozen items. Enough to show the shape of the
+  degradation curve across tiers; not enough to publish.
 
 ## Path to the real Jetson + chassis build
 
