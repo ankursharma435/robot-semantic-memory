@@ -1,0 +1,33 @@
+# Core encoder (MRL-capable multimodal embeddings)
+# >=3.1.0 is a HARD requirement, not a preference: jina-clip-v2 ships its
+# module as `custom_st.Transformer`, and the loader that can resolve that
+# only exists in sentence-transformers 3.x+. On 2.7.0 the model load dies
+# with ModuleNotFoundError: No module named 'custom_st'. Verified on 5.1.2.
+sentence-transformers>=3.1.0
+einops
+timm
+torchvision      # pulled in by timm, but name it explicitly — timm's import fails without it
+pillow
+
+# Numerics / storage (pure numpy — no faiss dependency, keeps this portable to Jetson's arm64)
+numpy
+
+# Webcam capture for the pre-hardware demo
+opencv-python
+
+# NVIDIA NIM (NV-CLIP baseline comparison + VLM escalation path) — plain REST
+requests
+python-dotenv
+
+# NVIDIA Riva (voice in/out via hosted Speech NIM) — gRPC client
+#
+# PIN EXPLAINED (2026-09-03): nvidia-riva-client 2.27.0's generated gRPC stubs
+# require grpcio>=1.81.0, but 1.80.0 is the last grpcio with a Python 3.9
+# wheel — so on 3.9 the newest client raises at import:
+#   "The grpc package installed is at version 1.80.0, but the generated code
+#    in riva/proto/riva_asr_pb2_grpc.py depends on grpcio>=1.81.0"
+# 2.25.1 works on 3.9. On Python 3.11+ grpcio>=1.81 is available and you can
+# drop this pin. Verified working: 2.25.1 on CPython 3.9.6 / macOS arm64.
+nvidia-riva-client==2.25.1
+sounddevice
+soundfile

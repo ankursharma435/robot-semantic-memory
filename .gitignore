@@ -1,0 +1,32 @@
+# SECRETS — never commit. .env holds a live nvapi- key and the Riva function IDs.
+# If this is ever committed, the key is in git history permanently and must be
+# rotated at build.nvidia.com, even if you delete the file in a later commit.
+.env
+.env.local
+*.key
+
+# Live camera frames published by camera_bridge.py
+.camera_feed/
+
+# Per-session metrics dumps written by demo_live.py on quit.
+# Keep any run you actually want to cite — just rename it first.
+metrics_session_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Local tool permissions — machine-specific paths, no value to anyone else
+.claude/settings.local.json
+
+# NOT ignored, on purpose:
+#   thresholds.json   - the measured gate calibration. Committing it is what
+#                        makes the demo's behaviour reproducible by someone else.
+#   test_objects/*.jpg - the photographs the Recall@1 numbers come from. Without
+#                        them the measurements can't be checked.
