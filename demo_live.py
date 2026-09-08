@@ -28,6 +28,12 @@ FIRST, in isolation, before running this. Debugging NIM/Riva connectivity
 issues is much easier one client at a time than inside the full loop.
 """
 
+# Required on Python 3.9: annotations like `HUD | None` are PEP 604 syntax,
+# which 3.9 tries to evaluate at runtime and rejects with
+# "unsupported operand type(s) for |". Deferring annotation evaluation makes
+# them plain strings, so the file runs on 3.9 and on 3.10+ alike.
+from __future__ import annotations
+
 import argparse
 import sys
 import os
