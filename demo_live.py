@@ -267,12 +267,21 @@ def main():
             if label_i < len(preset_labels):
                 label = preset_labels[label_i]
                 label_i += 1
-                print(f"  (preset label {label_i}/{len(preset_labels)}: '{label}')")
+            elif preset_labels:
+                # Presets given but exhausted. Do NOT fall back to input():
+                # that blocks the frame loop and looks like the demo hanging
+                # mid-recording. Auto-name instead and carry on.
+                label_i += 1
+                label = f"object {label_i}"
+                print(f"  (presets exhausted — auto-labelled '{label}')")
             else:
                 label = input("Label for this memory (e.g. 'red mug on shelf'): ").strip()
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             vec = embed_image(Image.fromarray(rgb))
             store.add("medium", vec, pos[0], pos[1], label=label)
+            store.add("long", vec, pos[0], pos[1], label=label)
+            hud.set_memory(store.stats())
+            hud.toast(f"MEMORIZED  {label}", 2.5)
             print(f"  -> memorized '{label}' at ({pos[0]:.1f}, {pos[1]:.1f})")
         elif key == ord(' '):
             query_text = input("Query (e.g. 'where is the red mug'): ").strip()
@@ -318,6 +327,24 @@ def main():
         elif key == ord('0'):
             hud.show_card(None)
         elif key == ord('p'):
+            lat = metrics.average_latency_by_path()
+            brk = metrics.average_cheap_path_breakdown()
+            storage = metrics.storage_footprint(
+                store.stats(), TIER_DIMS,
+                fixed_width_dim=nvidia_nim.BASELINE_EMBED_DIM)
+            lines = []
+            if brk["search_ms"] is not None:
+                lines.append(f"memory lookup      {brk['search_ms']:.3f} ms")
+            if lat["escalate_ms"]:
+                lines.append(f"escalate to VLM    {lat['escalate_ms']:.0f} ms")
+                if brk["search_ms"]:
+                    lines.append(f"-> ~{lat['escalate_ms'] / brk['search_ms']:,.0f}x cheaper to remember")
+            if storage["savings_factor"]:
+                lines.append(f"storage  {storage['tiered_bytes'] / 1024:.0f} KB tiered "
+                              f"vs {storage['fixed_width_bytes'] / 1024:.0f} KB fixed-width")
+                lines.append(f"-> {storage['savings_factor']:.0f}x less storage")
+            lines.append(f"escalation rate    {metrics.escalation_rate() * 100:.0f}%")
+            hud.show_metrics(lines)
             metrics.print_report(
                 tier_counts=store.stats(),
                 tier_dims=TIER_DIMS,

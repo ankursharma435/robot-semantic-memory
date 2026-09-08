@@ -100,6 +100,8 @@ class HUD:
         self._panel = None
         self._card_img = None
         self.card = None
+        self._toast = None          # (text, expires_at)
+        self._dyn = None            # dynamically built card
         self._dirty = True
 
     # ---- state -----------------------------------------------------------
@@ -181,16 +183,35 @@ class HUD:
                "github.com/ankursharma435/robot-semantic-memory"]),
     }
 
+    def toast(self, text: str, seconds: float = 2.5):
+        """A banner across the camera view. Confirms an action ON THE FRAME,
+        so a recording that never shows the terminal still shows what
+        happened — pressing 'm' used to change only a small tier count."""
+        import time as _t
+        self._toast = (text, _t.time() + seconds)
+
+    def show_metrics(self, lines):
+        """A card built at runtime from the session's real numbers, so the
+        metrics beat is visible without showing terminal output."""
+        self._dyn = list(lines)
+        self.card = "_dyn"
+        self._card_img = None
+        self._touch()
+
     def show_card(self, key: str | None):
         """key is '1'-'5' to show a card, or None/'0' to go back to live."""
-        new = key if key in self.CARDS else None
+        new = key if (key in self.CARDS or key == "_dyn") else None
         if new != getattr(self, "card", None):
             self.card = new
             self._touch()
         return new is not None
 
     def _render_card(self, key) -> np.ndarray:
-        kicker, title, bullets = self.CARDS[key]
+        if key == "_dyn":
+            kicker, title, bullets = ("MEASURED THIS RUN", "What it costs.",
+                                       self._dyn or [])
+        else:
+            kicker, title, bullets = self.CARDS[key]
         im = Image.new("RGB", (CANVAS_W, CANVAS_H), BG)
         d = ImageDraw.Draw(im)
         f_kick = _font(_MONO, 20)
@@ -356,4 +377,28 @@ class HUD:
         canvas[y0:y0 + nh, x0:x0 + nw] = small
 
         canvas[:, CAM_W:] = self._panel[:, :, ::-1]      # RGB -> BGR
+
+        if self._toast:
+            import time as _t
+            text, expires = self._toast
+            if _t.time() < expires:
+                canvas = self._draw_toast(canvas, text)
+            else:
+                self._toast = None
         return canvas
+
+    def _draw_toast(self, canvas, text):
+        """Green banner across the camera column."""
+        im = Image.fromarray(canvas[:, :, ::-1])
+        d = ImageDraw.Draw(im, "RGBA")
+        f = _font(_MONO, 30, 1)
+        pad, bh = 26, 86
+        y0 = CANVAS_H // 2 - bh // 2
+        d.rectangle([0, y0, CAM_W, y0 + bh], fill=(11, 74, 64, 235))
+        d.rectangle([0, y0, 8, y0 + bh], fill=CHEAP)
+        lines = self._wrap(d, text, f, CAM_W - 2 * pad - 20)[:2]
+        ty = y0 + (bh - len(lines) * 36) // 2
+        for ln in lines:
+            d.text((pad + 14, ty), ln, font=f, fill=(200, 255, 240))
+            ty += 36
+        return np.array(im)[:, :, ::-1].copy()
