@@ -216,6 +216,18 @@ def main():
     store = MemoryStore(short_ttl_seconds=30.0)
     metrics = MetricsLogger()
     hud = HUD(TIER_DIMS)
+
+    # Mirror everything this demo prints into the window's log strip, so a
+    # screen recording of the single demo window captures the whole story
+    # and there's no second window to frame.
+    import builtins
+    _real_print = builtins.print
+
+    def print(*a, **kw):                     # noqa: A001 - deliberate shadow
+        _real_print(*a, **kw)
+        msg = " ".join(str(x) for x in a).strip()
+        if msg:
+            hud.log(msg)
     pos = [0.0, 0.0]
     step = 0.5
     frame_count = 0

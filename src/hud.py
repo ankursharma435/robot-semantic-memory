@@ -34,7 +34,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 CANVAS_W, CANVAS_H = 1280, 720
 PANEL_W = 560                      # right-hand panel
-CAM_W = CANVAS_W - PANEL_W         # 720px for the camera
+CAM_W = CANVAS_W - PANEL_W         # 720px for the camera column
+CAM_H = 466                        # camera sits above...
+LOG_H = CANVAS_H - CAM_H           # ...an embedded log of the demo's output
 
 BG = (10, 14, 18)
 PANEL_BG = (16, 21, 26)
@@ -101,6 +103,9 @@ class HUD:
         self._card_img = None
         self.card = None
         self._toast = None          # (text, expires_at)
+        self._log = []              # embedded terminal output
+        self._log_img = None
+        self._log_dirty = True
         self._dyn = None            # dynamically built card
         self._dirty = True
 
@@ -183,6 +188,15 @@ class HUD:
                "github.com/ankursharma435/robot-semantic-memory"]),
     }
 
+    def log(self, text: str, keep: int = 9):
+        """Mirror a line of the demo's output into the window, so a screen
+        recording of this one window shows everything — no second window to
+        frame, and nothing important living only in terminal scrollback."""
+        for raw in str(text).rstrip().split("\n"):
+            self._log.append(raw)
+        self._log = self._log[-keep:]
+        self._log_dirty = True
+
     def toast(self, text: str, seconds: float = 2.5):
         """A banner across the camera view. Confirms an action ON THE FRAME,
         so a recording that never shows the terminal still shows what
@@ -247,6 +261,30 @@ class HUD:
         fw = int(w * max(0.0, min(1.0, frac)))
         if fw > 0:
             d.rectangle([x, y, x + fw, y + h], fill=colour)
+
+    def _render_log(self) -> np.ndarray:
+        im = Image.new("RGB", (CAM_W, LOG_H), (7, 10, 13))
+        d = ImageDraw.Draw(im)
+        f = _font(_MONO, 15)
+        fl = _font(_MONO, 12)
+        d.line([(0, 0), (CAM_W, 0)], fill=LINE)
+        d.text((20, 10), "DEMO OUTPUT", font=fl, fill=INK_FAINT)
+        y = 32
+        for ln in self._log:
+            colour = INK_SOFT
+            low = ln.lower()
+            if "escalat" in low or "vlm" in low:
+                colour = ESC
+            elif "cheap" in low or "memorized" in low or "memorised" in low:
+                colour = CHEAP
+            # trim to the panel width rather than wrapping; these are log lines
+            while ln and d.textlength(ln, font=f) > CAM_W - 40:
+                ln = ln[:-2]
+            d.text((20, y), ln, font=f, fill=colour)
+            y += 20
+            if y > LOG_H - 18:
+                break
+        return np.array(im)
 
     def _render_panel(self) -> np.ndarray:
         im = Image.new("RGB", (PANEL_W, CANVAS_H), PANEL_BG)
@@ -366,15 +404,21 @@ class HUD:
         canvas = np.zeros((CANVAS_H, CANVAS_W, 3), dtype=np.uint8)
         canvas[:, :] = BG[::-1]
 
-        # camera, scaled to fit the left column, centred
+        # camera, scaled into the top-left region
         fh, fw = frame.shape[:2]
-        s = min(CAM_W / fw, CANVAS_H / fh)
+        s = min(CAM_W / fw, CAM_H / fh)
         nw, nh = max(1, int(fw * s)), max(1, int(fh * s))
         import cv2
         small = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
-        y0 = (CANVAS_H - nh) // 2
+        y0 = (CAM_H - nh) // 2
         x0 = (CAM_W - nw) // 2
         canvas[y0:y0 + nh, x0:x0 + nw] = small
+
+        # embedded log beneath it
+        if self._log_dirty or self._log_img is None:
+            self._log_img = self._render_log()
+            self._log_dirty = False
+        canvas[CAM_H:, :CAM_W] = self._log_img[:, :, ::-1]
 
         canvas[:, CAM_W:] = self._panel[:, :, ::-1]      # RGB -> BGR
 
@@ -393,7 +437,7 @@ class HUD:
         d = ImageDraw.Draw(im, "RGBA")
         f = _font(_MONO, 30, 1)
         pad, bh = 26, 86
-        y0 = CANVAS_H // 2 - bh // 2
+        y0 = CAM_H // 2 - bh // 2
         d.rectangle([0, y0, CAM_W, y0 + bh], fill=(11, 74, 64, 235))
         d.rectangle([0, y0, 8, y0 + bh], fill=CHEAP)
         lines = self._wrap(d, text, f, CAM_W - 2 * pad - 20)[:2]
