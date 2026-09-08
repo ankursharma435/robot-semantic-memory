@@ -182,7 +182,21 @@ def run_nvclip_comparison(frame, metrics: MetricsLogger, hud=None):
 
 def main():
     parser = add_source_args(argparse.ArgumentParser(description=__doc__))
+    # Typing on camera is the enemy of a clean recording: input() blocks the
+    # frame loop, so the video window freezes while you type in the terminal,
+    # and you have to switch windows mid-take. These presets let 'm' and the
+    # 7/8/9 keys run without any typing at all.
+    parser.add_argument("--labels", default="",
+                        help="comma-separated labels for successive 'm' presses, "
+                             "so memorizing needs no typing "
+                             "(e.g. \"the green mug,the blue mug,the orange\")")
+    parser.add_argument("--queries", default="",
+                        help="comma-separated preset queries bound to keys 7, 8, 9")
     args = parser.parse_args()
+
+    preset_labels = [s.strip() for s in args.labels.split(",") if s.strip()]
+    preset_queries = [s.strip() for s in args.queries.split(",") if s.strip()]
+    label_i = 0
 
     try:
         source = FrameSource.open(camera=args.camera, images=args.images,
@@ -211,6 +225,11 @@ def main():
     print("Ready. w/a/s/d move · m memorize · space type-query · v voice-query")
     print("       c baseline compare · p print metrics · q/ESC quit")
     print("       1-5 show a presentation card · 0 back to live camera")
+    if preset_labels:
+        print(f"       m memorizes with preset labels: {preset_labels}")
+    if preset_queries:
+        for i, q in enumerate(preset_queries[:3]):
+            print(f"       {7 + i} -> \"{q}\"")
     print()
     print("  Recording order: 1 (problem) · 2 (innovation) · 0 · memorize with m")
     print("  · 0 · space query · hold up the unseen object · space query")
@@ -245,7 +264,12 @@ def main():
         elif key == ord('d'):
             pos[0] += step
         elif key == ord('m'):
-            label = input("Label for this memory (e.g. 'red mug on shelf'): ").strip()
+            if label_i < len(preset_labels):
+                label = preset_labels[label_i]
+                label_i += 1
+                print(f"  (preset label {label_i}/{len(preset_labels)}: '{label}')")
+            else:
+                label = input("Label for this memory (e.g. 'red mug on shelf'): ").strip()
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             vec = embed_image(Image.fromarray(rgb))
             store.add("medium", vec, pos[0], pos[1], label=label)
@@ -273,6 +297,20 @@ def main():
                 print(f"  voice query failed: {e}")
         elif key == ord('c'):
             run_nvclip_comparison(frame, metrics, hud)
+        elif key in (ord('7'), ord('8'), ord('9')):
+            idx = key - ord('7')
+            if idx < len(preset_queries):
+                query_text = preset_queries[idx]
+                print(f"\nQuery (preset {idx + 1}): {query_text}")
+                hud.show_card(None)
+                hud.begin_query(query_text)
+                cv2.imshow("robot-semantic-memory — NVIDIA-integrated demo",
+                           hud.compose(frame))
+                cv2.waitKey(1)
+                run_query(query_text, frame, pos, store, metrics, hud)
+            else:
+                print(f"  no preset query bound to key {chr(key)} "
+                      f"(pass --queries to set them)")
         elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
             # Presentation cards, shown in this window so a screen recording
             # captures them. 0 returns to the live camera view.
