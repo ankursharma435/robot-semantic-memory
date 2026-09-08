@@ -57,8 +57,8 @@ flowchart LR
     T --> L[long 768d]
     S & M & L --> BM[best_match<br/>tier priority]
     BM --> G{gate}
-    G -->|CHEAP<br/>~0.16 ms| ACT[act on stored coordinates]
-    G -->|ESCALATE<br/>~2.6 s| VLM[NVIDIA NIM VLM<br/>→ on-device VLA later]
+    G -->|CHEAP<br/>~0.06 ms| ACT[act on stored coordinates]
+    G -->|ESCALATE<br/>1-6 s| VLM[NVIDIA NIM VLM<br/>→ on-device VLA later]
 ```
 
 The gate escalates on three conditions: the best match is below that tier's
@@ -72,8 +72,10 @@ Truncating an MRL embedding *systematically raises* similarity — the dropped
 dimensions are the discriminative ones. Measured, same image/text pair:
 
 ```
-long (768d) = 0.354    medium (256d) = 0.386    short (64d) = 0.435
+long (768d) = 0.393    medium (256d) = 0.436    short (64d) = 0.340
 ```
+(from a live query against the real object set; the effect was larger still on
+synthetic scenes: 0.354 / 0.386 / 0.435)
 
 So a narrow tier looks *more confident* while being *less able to tell things
 apart*. Picking the highest score across tiers — the obvious implementation —
@@ -89,16 +91,56 @@ silently stop covering the bug.
 
 ## Measured results
 
-Numbers from this machine (MacBook, CPU only). Reproduce with
-`python verify_offline.py --live` and `python evaluate_tiers.py <manifest> --calibrate`.
+From this machine (MacBook, CPU only), calibrated against 11 photographs of
+four household objects. Reproduce with `python verify_offline.py --live` and
+`python evaluate_tiers.py test_objects/manifest.json --calibrate`.
 
-| Result | Measured | What it means |
+| Result | Measured | Note |
 |---|---|---|
-| Memory lookup | **0.16 ms** | vs ~2.6 s to escalate — **~16,000× cheaper** |
-| Storage | **16 KB vs 64 KB** | **4× less** than the 2048-dim fixed-width baseline |
-| Cross-modal retrieval | 4/4 (baseline), 3/4 (local) | text query → correct image, synthetic scenes |
-| Escalation on unseen objects | correct | novelty detection fires after the `best_match` fix |
-| Unit tests | 44 passing, <1 s | no model, network or camera needed |
+| Recall@1, all three tiers | **100%** | on the 11-photo set — including 64 dims |
+| Margin over best wrong match | **+0.043 / +0.038 / +0.013** | long / medium / short — see below |
+| Memory lookup | **0.058 ms** | brute-force cosine over the learned tiers |
+| Escalation round trip | **1–6 s** | hosted 11B VLM, highly variable |
+| Storage per frame | **256 B vs 8192 B** | **32×** less at 64 dims vs a 2048-dim baseline |
+| Unit tests | **47 passing, <1 s** | no model, network or camera needed |
+
+Three ratios get quoted in this project and they have **different bases** — worth
+keeping straight:
+
+- **32×** — storage per frame, 64 dims against a fixed-width 2048-dim baseline.
+  Pure arithmetic on measured bytes.
+- **~4,200×** — *operations* per query: encoding the query plus the lookup,
+  against one 11B VLM call. Estimated as `2 × params × tokens`.
+- **~10⁴–10⁵×** — *wall-clock* of the lookup alone against an escalation. Large
+  but noisy, because the VLM round trip varies from 1 to 6 seconds. Prefer the
+  first two.
+
+### What the tiers actually showed
+
+Every tier got every retrieval right, 64 dims included — colour survives
+truncation, so two same-shape mugs separated cleanly even at the narrowest
+width. What shrinks is **margin**: the gap to the nearest wrong answer collapses
+from +0.043 to +0.013, three times less headroom for the same accuracy. That is
+the real cost of truncation here, and it is why each tier carries its own
+calibrated threshold (0.331 / 0.361 / 0.416).
+
+So: **the 64-dim tier did not fail on this set.** Don't read the tiering
+argument as "narrow tiers break" — read it as "narrow tiers run closer to the
+edge".
+
+### Projected to a fleet
+
+Assuming 1 frame/sec continuous perception, 8-hour shifts, 250 shifts/year:
+
+| | Tiered | Fixed-width 2048d |
+|---|---|---|
+| One robot, one shift | 7 MB | 236 MB |
+| One robot, one year | 1.8 GB | 59 GB |
+| 50-robot fleet, one year | **92 GB** | **2.9 TB** |
+
+If the gate answers 8 queries in 10, perception compute drops ~5×. Perception
+*energy* is **inferred** from that, not measured — no wattage was recorded here
+or on a Jetson.
 
 **The honest one:** on this hardware the cheap/expensive comparison
 **inverts**. The local text tower (561M params, CPU, ~0.5–1.8 s) is *slower*
@@ -115,8 +157,10 @@ is the wrong axis until the encoder runs on a Jetson under TensorRT.
 - **Not** anything measured on a Jetson, under TensorRT, or on Isaac GR00T.
   The hosted VLM is a *stand-in* for the escalation target, running on better
   hardware than the local encoder.
-- **Not** a benchmark. Recall@1 comes from a small hand-photographed object
-  set; treat it as an illustration, not a published result.
+- **Not** a benchmark. Recall@1 comes from 11 hand-photographed images of four
+  objects; treat it as an illustration, not a published result.
+- **Not** a measured power figure. Energy is inferred from compute and labelled
+  as such throughout.
 
 ## NVIDIA technology used
 
