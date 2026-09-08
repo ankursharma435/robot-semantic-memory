@@ -1,0 +1,42 @@
+{
+  "source": "test_objects/manifest.json (11 images, 4 labels), prompt 'a photo of a {label}', generated 2026-09-08",
+  "confidence": {
+    "short": 0.4156,
+    "medium": 0.3612,
+    "long": 0.3308
+  },
+  "novelty": {
+    "short": 0.3661,
+    "medium": 0.29,
+    "long": 0.2604
+  },
+  "detail": {
+    "short": {
+      "confidence": 0.4156,
+      "novelty": 0.3661,
+      "correct_min": 0.4221,
+      "correct_avg": 0.465,
+      "incorrect_max": 0.409,
+      "incorrect_avg": 0.3661,
+      "separation": "clean"
+    },
+    "medium": {
+      "confidence": 0.3612,
+      "novelty": 0.29,
+      "correct_min": 0.3801,
+      "correct_avg": 0.4183,
+      "incorrect_max": 0.3422,
+      "incorrect_avg": 0.29,
+      "separation": "clean"
+    },
+    "long": {
+      "confidence": 0.3308,
+      "novelty": 0.2604,
+      "correct_min": 0.3521,
+      "correct_avg": 0.3886,
+      "incorrect_max": 0.3094,
+      "incorrect_avg": 0.2604,
+      "separation": "clean"
+    }
+  }
+}

@@ -44,12 +44,24 @@ from encoder import embed_image, embed_text, truncate, cosine, TIER_DIMS
 
 
 def load_manifest(manifest_path: str):
+    """Read filename -> label pairs.
+
+    Keys beginning with "_" are metadata, not photos — make_manifest.py
+    writes "_holdout" to record which labels were deliberately never
+    memorized. Skipping them here rather than in the caller means every
+    consumer of the manifest gets it right.
+    """
     with open(manifest_path) as f:
         manifest = json.load(f)
     base_dir = os.path.dirname(manifest_path)
     items = []
     for filename, label in manifest.items():
+        if filename.startswith("_"):
+            continue
         path = os.path.join(base_dir, filename)
+        if not os.path.exists(path):
+            print(f"  warning: {filename} listed in manifest but not found — skipping")
+            continue
         items.append((path, label))
     return items
 
