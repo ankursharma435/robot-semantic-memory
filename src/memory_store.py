@@ -85,8 +85,27 @@ class MemoryStore:
     # Priority order for answering a recall query: most durable first.
     PRIORITY = ("long", "medium", "short")
 
+    # Tiers that count as "having learned something". The short tier does
+    # NOT, and that distinction matters more than it looks.
+    #
+    # The always-watching loop writes every Nth camera frame into the short
+    # tier, unlabelled. So an object held up to the camera is in memory
+    # within a second of appearing. Asking "where is the shoe" then matched
+    # the short tier at 0.459 against a 0.416 threshold and returned CHEAP,
+    # with label=None -- while long and medium sat at 0.181 and 0.211,
+    # nowhere near. The system reported that it knew an object it had never
+    # been taught, purely because that object was in view.
+    #
+    # For plain recall that is defensible: the short tier means "what I just
+    # saw", and it had just seen it. For NOVELTY it is wrong. The question
+    # the gate asks is "have I ever learned this?", and "I am looking at it
+    # right now" is not an answer. A robot that concludes it knows an object
+    # because the object is currently in frame will never escalate on
+    # anything it can see -- which is every object it might need help with.
+    LEARNED_TIERS = ("long", "medium")
+
     def best_match(self, full_query_embedding: np.ndarray, thresholds: dict,
-                    priority: tuple = None):
+                    priority: tuple = None, learned_only: bool = True):
         """Pick one answer across tiers, respecting tier priority.
 
         Added 2026-09-03 to fix a real bug in both demos. They used to do
@@ -111,10 +130,18 @@ class MemoryStore:
         the top-1 of the most durable non-empty tier, so the caller's gate
         sees a comparable score and escalates on it.
 
+        learned_only (default True) restricts the answer to LEARNED_TIERS,
+        so a match cannot come from the unlabelled always-watching tier.
+        See LEARNED_TIERS for why. Pass learned_only=False to search every
+        tier — useful for "did I just see this?" rather than "do I know
+        this?", which is a different question with a different answer.
+
         Returns (tier, similarity, entry) or (None, -1.0, None) if the
         store is empty.
         """
         priority = priority or self.PRIORITY
+        if learned_only:
+            priority = tuple(t for t in priority if t in self.LEARNED_TIERS)
 
         fallback = (None, -1.0, None)
         for tier in priority:

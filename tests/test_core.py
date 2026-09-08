@@ -165,6 +165,45 @@ class TestBestMatchRegression(unittest.TestCase):
         self.assertEqual(tier, "medium")
         self.assertEqual(entry.label, "only medium")
 
+    def test_object_in_view_is_not_mistaken_for_a_learned_object(self):
+        """The always-watching loop writes every Nth frame into the short
+        tier, so an object held up to the camera is in memory within a
+        second. That must NOT make the gate think it has learned it —
+        otherwise a robot never escalates on anything it can see."""
+        store = MemoryStore()
+        learned = make_vector(head=0.05, tail_seed=11)
+        store.add("long", learned, 1.0, 1.0, label="learned thing")
+        store.add("medium", learned, 1.0, 1.0, label="learned thing")
+
+        # a novel object, in frame right now: short tier only, unlabelled
+        novel = make_vector(head=0.05, tail_seed=77)
+        store.add("short", novel, 9.0, 9.0)
+
+        # Thresholds low enough that the short tier WOULD clear if consulted.
+        thresholds = {"long": 0.9, "medium": 0.9, "short": 0.0}
+        tier, score, entry = store.best_match(novel, thresholds)
+        self.assertNotEqual(tier, "short",
+                             "a novel object in view must not answer as learned")
+        self.assertTrue(entry is None or entry.label is not None,
+                        "an answer must never come from an unlabelled entry")
+
+    def test_learned_only_false_can_still_see_the_short_tier(self):
+        """'Did I just see this?' is a different question from 'do I know
+        this?' — the short tier is the right answer to the first one."""
+        store = MemoryStore()
+        seen = make_vector(head=0.05, tail_seed=21)
+        store.add("short", seen, 4.0, 5.0)
+        tier, score, entry = store.best_match(
+            seen, {"long": 0.1, "medium": 0.1, "short": 0.1},
+            learned_only=False)
+        self.assertEqual(tier, "short")
+        self.assertIsNotNone(entry)
+
+    def test_short_tier_is_not_a_learned_tier(self):
+        self.assertNotIn("short", MemoryStore.LEARNED_TIERS)
+        self.assertIn("long", MemoryStore.LEARNED_TIERS)
+        self.assertIn("medium", MemoryStore.LEARNED_TIERS)
+
     def test_empty_store_returns_none(self):
         tier, score, entry = MemoryStore().best_match(
             self.query, {"long": 0.1, "medium": 0.1, "short": 0.1})
