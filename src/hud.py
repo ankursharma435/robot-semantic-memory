@@ -204,13 +204,61 @@ class HUD:
         import time as _t
         self._toast = (text, _t.time() + seconds)
 
-    def show_metrics(self, lines):
+    def show_metrics(self, measured, projected=None):
         """A card built at runtime from the session's real numbers, so the
-        metrics beat is visible without showing terminal output."""
-        self._dyn = list(lines)
+        metrics beat is visible without showing terminal output.
+
+        Two columns: what was measured in this run, and what that projects to
+        on a fleet. Kept side by side rather than stacked because ten stacked
+        rows overflow the canvas, and because the split is the point -- a
+        viewer should be able to see at a glance which half is measurement
+        and which half is extrapolation.
+        """
+        self._dyn = (list(measured), list(projected or []))
         self.card = "_dyn"
         self._card_img = None
         self._touch()
+
+    def _render_metrics_card(self) -> np.ndarray:
+        measured, projected = self._dyn or ([], [])
+        im = Image.new("RGB", (CANVAS_W, CANVAS_H), BG)
+        d = ImageDraw.Draw(im)
+        f_kick = _font(_MONO, 18)
+        f_title = _font(_SANS, 54, 1)
+        f_row = _font(_MONO, 19)
+        f_note = _font(_MONO, 14)
+
+        d.text((80, 96), "WHAT IT COSTS", font=f_kick, fill=NV)
+        d.text((80, 132), "Remembering vs asking.", font=f_title, fill=INK)
+
+        colw = (CANVAS_W - 160 - 60) // 2
+        for i, (head, rows, col) in enumerate(
+                [("MEASURED THIS RUN", measured, CHEAP),
+                 ("PROJECTED TO A FLEET", projected, (183, 166, 220))]):
+            if not rows:
+                continue
+            x = 80 + i * (colw + 60)
+            d.rounded_rectangle([x, 236, x + colw, 236 + 340], radius=6,
+                                 fill=PANEL_BG)
+            d.text((x + 26, 262), head, font=f_note, fill=col)
+            y = 300
+            for r in rows[:8]:
+                # Clip rather than overflow the card. A long row used to run
+                # past the panel edge and get cut mid-character, which reads
+                # as a rendering bug in a recording.
+                t = r
+                while t and d.textlength(t, font=f_row) > colw - 52:
+                    t = t[:-2]
+                d.text((x + 26, y), t, font=f_row, fill=INK)
+                y += 34
+
+        d.text((80, CANVAS_H - 92),
+               "Projections assume 1 frame/sec, 8-hour shifts, 250 shifts/year.",
+               font=f_note, fill=INK_FAINT)
+        d.text((80, CANVAS_H - 66),
+               "Energy would be inferred from compute, not measured.",
+               font=f_note, fill=INK_FAINT)
+        return np.array(im)
 
     def show_card(self, key: str | None):
         """key is '1'-'5' to show a card, or None/'0' to go back to live."""
@@ -222,10 +270,8 @@ class HUD:
 
     def _render_card(self, key) -> np.ndarray:
         if key == "_dyn":
-            kicker, title, bullets = ("MEASURED THIS RUN", "What it costs.",
-                                       self._dyn or [])
-        else:
-            kicker, title, bullets = self.CARDS[key]
+            return self._render_metrics_card()
+        kicker, title, bullets = self.CARDS[key]
         im = Image.new("RGB", (CANVAS_W, CANVAS_H), BG)
         d = ImageDraw.Draw(im)
         f_kick = _font(_MONO, 20)
