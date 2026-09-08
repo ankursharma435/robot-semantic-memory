@@ -134,6 +134,16 @@ The bottom three have **not** been run. The gate doesn't know what sits behind
 it, so swapping the escalation target is one function —
 `nvidia_nim.call_vlm_escalation()`.
 
+## Slides
+
+[`docs/results-deck.pptx`](docs/results-deck.pptx) — ten slides covering the
+problem, the MRL tiering idea, the gate, the measured results, and the
+projections to a warehouse fleet. Every figure is tagged by how it was
+arrived at: **measured**, **projected**, or **inferred**. Slide 9 is a list of
+things the project deliberately does *not* claim.
+
+Regenerate it with `node docs/make_deck.js` (needs `pptxgenjs`).
+
 ## What's here
 
 ```
