@@ -214,6 +214,14 @@ def main():
     builtins.print = _tee_print
 
     preset_labels = [s.strip() for s in args.labels.split(",") if s.strip()]
+    # Each preset label gets its OWN simulated position. Without this every
+    # object is memorized wherever the position happens to be -- and in a
+    # recorded take where w/a/s/d was never pressed, that is (0,0) for all of
+    # them. "Found it, navigate to (0.0, 0.0)" is a meaningless answer when
+    # every object is at (0,0), and it undercuts the whole point of recalling
+    # a location. Spread them instead, so each recall names a distinct spot.
+    PRESET_POSITIONS = [(1.5, 0.0), (0.0, 2.0), (-1.5, 0.5), (0.5, -2.0),
+                        (2.0, 1.5), (-2.0, -1.0)]
     preset_queries = [s.strip() for s in args.queries.split(",") if s.strip()]
     label_i = 0
 
@@ -284,6 +292,8 @@ def main():
         elif key == ord('m'):
             if label_i < len(preset_labels):
                 label = preset_labels[label_i]
+                if label_i < len(PRESET_POSITIONS):
+                    pos[0], pos[1] = PRESET_POSITIONS[label_i]
                 label_i += 1
             elif preset_labels:
                 # Presets given but exhausted. Do NOT fall back to input():
