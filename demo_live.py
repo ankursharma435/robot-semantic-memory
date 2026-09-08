@@ -19,7 +19,8 @@ Controls:
   m         memorize current frame (typed label, as before)
   space     type a text query
   v         speak a query instead (records 4s, transcribes via Riva)
-  c         NV-CLIP comparison beat on the current frame
+  c         baseline-embedder comparison on the current frame
+  1-5       show a full-screen presentation card (0 = back to live camera)
   p         print metrics report so far
   q / ESC   quit -> prints report, saves metrics JSON
 
@@ -208,7 +209,12 @@ def main():
     latest_frame = None
 
     print("Ready. w/a/s/d move · m memorize · space type-query · v voice-query")
-    print("       c NV-CLIP compare · p print metrics · q/ESC quit")
+    print("       c baseline compare · p print metrics · q/ESC quit")
+    print("       1-5 show a presentation card · 0 back to live camera")
+    print()
+    print("  Recording order: 1 (problem) · 2 (innovation) · 0 · memorize with m")
+    print("  · 0 · space query · hold up the unseen object · space query")
+    print("  · 3 (why it matters) · p (metrics) · 4 (stack) · 5 (github) · q")
 
     while True:
         ok, frame = source.read()
@@ -267,6 +273,12 @@ def main():
                 print(f"  voice query failed: {e}")
         elif key == ord('c'):
             run_nvclip_comparison(frame, metrics, hud)
+        elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
+            # Presentation cards, shown in this window so a screen recording
+            # captures them. 0 returns to the live camera view.
+            hud.show_card(chr(key))
+        elif key == ord('0'):
+            hud.show_card(None)
         elif key == ord('p'):
             metrics.print_report(
                 tier_counts=store.stats(),

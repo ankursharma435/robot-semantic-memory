@@ -98,6 +98,8 @@ class HUD:
         self.active = set()
         self.status = "ready"
         self._panel = None
+        self._card_img = None
+        self.card = None
         self._dirty = True
 
     # ---- state -----------------------------------------------------------
@@ -143,6 +145,66 @@ class HUD:
     def light(self, *services):
         self.active = set(self.active) | set(services)
         self._touch()
+
+    # ---- presentation cards ---------------------------------------------
+    #
+    # Full-canvas title cards, shown in the demo window itself so a screen
+    # recording captures them. Without these the recording is 90 seconds of
+    # camera feed with no framing, and the narration has nothing to sit
+    # against. Press 1-5 to show one, 0 to return to the live view.
+
+    CARDS = {
+        "1": ("THE PROBLEM",
+              "A robot sees the same things,\nover and over.",
+              ["every question to a large VLM pays full price",
+               "for answers it already has"]),
+        "2": ("THE INNOVATION",
+              "One encode.\nThree memory tiers.",
+              ["Matryoshka: any prefix is still a valid embedding",
+               "short 64d   what I just saw",
+               "medium 256d  what I've learned",
+               "long 768d   what I know well"]),
+        "3": ("WHY IT MATTERS ON A ROBOT",
+              "Cheap memory,\nno network needed.",
+              ["an 8-hour shift of memory = 7 MB, not 236 MB",
+               "the cheap path needs no network at all",
+               "the accelerator stays free for driving and grasping"]),
+        "4": ("THE STACK",
+              "Open weights,\nNVIDIA microservices.",
+              ["jina-clip-v2         local, CC BY-NC, no GPU",
+               "llama-3.2-11b-vision  NVIDIA NIM",
+               "llama-nemotron-embed-vl  NVIDIA NIM",
+               "parakeet ASR + magpie TTS  NVIDIA Riva"]),
+        "5": ("SHIPPED",
+              "Code, tests,\nand the numbers.",
+              ["44 unit tests, every measurement reproducible",
+               "github.com/ankursharma435/robot-semantic-memory"]),
+    }
+
+    def show_card(self, key: str | None):
+        """key is '1'-'5' to show a card, or None/'0' to go back to live."""
+        new = key if key in self.CARDS else None
+        if new != getattr(self, "card", None):
+            self.card = new
+            self._touch()
+        return new is not None
+
+    def _render_card(self, key) -> np.ndarray:
+        kicker, title, bullets = self.CARDS[key]
+        im = Image.new("RGB", (CANVAS_W, CANVAS_H), BG)
+        d = ImageDraw.Draw(im)
+        f_kick = _font(_MONO, 20)
+        f_title = _font(_SANS, 62, 1)
+        f_bul = _font(_MONO, 24)
+        y = 150
+        d.text((90, y), kicker, font=f_kick, fill=NV); y += 52
+        for ln in title.split("\n"):
+            d.text((90, y), ln, font=f_title, fill=INK); y += 74
+        y += 30
+        for b in bullets:
+            d.text((90, y), "\u2022", font=f_bul, fill=NV)
+            d.text((124, y), b, font=f_bul, fill=INK_SOFT); y += 40
+        return np.array(im)
 
     # ---- drawing ---------------------------------------------------------
 
@@ -268,7 +330,14 @@ class HUD:
         return np.array(im)
 
     def compose(self, frame):
-        """frame is BGR from the camera; returns a fixed-size BGR canvas."""
+        """frame is BGR from the camera; returns a fixed-size BGR canvas.
+        If a presentation card is active, the card replaces the whole view."""
+        if getattr(self, "card", None):
+            if self._dirty or getattr(self, "_card_img", None) is None:
+                self._card_img = self._render_card(self.card)
+                self._dirty = False
+            return self._card_img[:, :, ::-1].copy()
+
         if self._dirty or self._panel is None:
             self._panel = self._render_panel()
             self._dirty = False
