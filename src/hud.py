@@ -303,7 +303,8 @@ class HUD:
                 y += 27
             y += 12
 
-        d.text((x, y), "MEMORY", font=self.f_label, fill=INK_FAINT)
+        d.text((x, y), "MATRYOSHKA EMBEDDING BASED SEMANTIC MEMORY",
+               font=self.f_label, fill=INK_FAINT)
         y += 26
         for t in ("short", "medium", "long"):
             d.text((x, y), f"{t}  {self.tier_dims[t]}d", font=self.f_mono, fill=INK_SOFT)

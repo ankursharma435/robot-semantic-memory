@@ -194,6 +194,25 @@ def main():
                         help="comma-separated preset queries bound to keys 7, 8, 9")
     args = parser.parse_args()
 
+    hud = HUD(TIER_DIMS)
+
+    # Mirror everything this demo prints into the window's log strip, so one
+    # window is enough to record. Patched onto builtins rather than defined
+    # as a local `print`, because a local of that name makes every earlier
+    # print() in this function an UnboundLocalError -- and patching builtins
+    # also catches the prints inside run_query() and the other helpers, which
+    # a function-local shadow would have missed.
+    import builtins
+    _real_print = builtins.print
+
+    def _tee_print(*a, **kw):
+        _real_print(*a, **kw)
+        msg = " ".join(str(x) for x in a).strip()
+        if msg:
+            hud.log(msg)
+
+    builtins.print = _tee_print
+
     preset_labels = [s.strip() for s in args.labels.split(",") if s.strip()]
     preset_queries = [s.strip() for s in args.queries.split(",") if s.strip()]
     label_i = 0
@@ -215,19 +234,6 @@ def main():
 
     store = MemoryStore(short_ttl_seconds=30.0)
     metrics = MetricsLogger()
-    hud = HUD(TIER_DIMS)
-
-    # Mirror everything this demo prints into the window's log strip, so a
-    # screen recording of the single demo window captures the whole story
-    # and there's no second window to frame.
-    import builtins
-    _real_print = builtins.print
-
-    def print(*a, **kw):                     # noqa: A001 - deliberate shadow
-        _real_print(*a, **kw)
-        msg = " ".join(str(x) for x in a).strip()
-        if msg:
-            hud.log(msg)
     pos = [0.0, 0.0]
     step = 0.5
     frame_count = 0
@@ -363,6 +369,7 @@ def main():
                 fixed_width_dim=nvidia_nim.BASELINE_EMBED_DIM,
             )
 
+    builtins.print = _real_print
     source.release()
     cv2.destroyAllWindows()
 
